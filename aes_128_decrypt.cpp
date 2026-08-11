@@ -1,8 +1,20 @@
-﻿#include "aes_128_decrypt.h"
+﻿/*
+模块说明：用于对下载到电机的App .bin文件进行AES128算法解密
+时间：20260803
+作者：hejingchi
+
+修改：dongshaoqiang
+修改内容：
+  添加GfMultBy03,GfMultBy09,GfMultBy0B,GfMultBy0D,GfMultBy0E函数，
+  修改MixColumns函数
+  解决对bin文件解密时数据块大小限制(原函数由于数据块异或逻辑，数据类型原因只能对16bytes的整数倍(最大240bytes)进行解密)
+时间：20260805
+*/
+
+#include "aes_128_decrypt.h"
 
 aes_128_decrypt::aes_128_decrypt()
 {
-
 }
 
 /*****************************************************************************
@@ -111,8 +123,28 @@ unsigned char aes_128_decrypt::GfMultBy02(unsigned char num)
     } else {
         num = (num << 1) ^ BPOLY;
     }
-
     return num;
+}
+
+//  GF(2^8) 乘法成员函数
+unsigned char aes_128_decrypt::GfMultBy03(unsigned char num) {
+    return GfMultBy02(num) ^ num;
+}
+
+unsigned char aes_128_decrypt::GfMultBy09(unsigned char num) {
+    return GfMultBy02(GfMultBy02(GfMultBy02(num))) ^ num;
+}
+
+unsigned char aes_128_decrypt::GfMultBy0B(unsigned char num) {
+    return GfMultBy02(GfMultBy02(GfMultBy02(num))) ^ GfMultBy02(num) ^ num;
+}
+
+unsigned char aes_128_decrypt::GfMultBy0D(unsigned char num) {
+    return GfMultBy02(GfMultBy02(GfMultBy02(num))) ^ GfMultBy02(GfMultBy02(num)) ^ num;
+}
+
+unsigned char aes_128_decrypt::GfMultBy0E(unsigned char num) {
+    return GfMultBy02(GfMultBy02(GfMultBy02(num))) ^ GfMultBy02(GfMultBy02(num)) ^ GfMultBy02(num);
 }
 
 /*****************************************************************************
@@ -125,30 +157,26 @@ unsigned char aes_128_decrypt::GfMultBy02(unsigned char num)
 *****************************************************************************/
 void aes_128_decrypt::MixColumns(unsigned char *pData, unsigned char bInvert)
 {
-    unsigned char i;
-    unsigned char temp;
-    unsigned char a0Pa2_M4;	// 4(a0 + a2)
-    unsigned char a1Pa3_M4;	// 4(a1 + a3)
-    unsigned char result[4];
+    if (bInvert) {
 
-    for (i = 0; i < 4; i++, pData += 4) {
-        temp = pData[0] ^ pData[1] ^ pData[2] ^ pData[3];
-        result[0] = temp ^ pData[0] ^ GfMultBy02((unsigned char)(pData[0] ^ pData[1]));
-        result[1] = temp ^ pData[1] ^ GfMultBy02((unsigned char)(pData[1] ^ pData[2]));
-        result[2] = temp ^ pData[2] ^ GfMultBy02((unsigned char)(pData[2] ^ pData[3]));
-        result[3] = temp ^ pData[3] ^ GfMultBy02((unsigned char)(pData[3] ^ pData[0]));
-
-        if (bInvert) {
-            a0Pa2_M4 = GfMultBy02(GfMultBy02((unsigned char)(pData[0] ^ pData[2])));
-            a1Pa3_M4 = GfMultBy02(GfMultBy02((unsigned char)(pData[1] ^ pData[3])));
-            temp	 = GfMultBy02((unsigned char)(a0Pa2_M4 ^ a1Pa3_M4));
-            result[0] ^= temp ^ a0Pa2_M4;
-            result[1] ^= temp ^ a1Pa3_M4;
-            result[2] ^= temp ^ a0Pa2_M4;
-            result[3] ^= temp ^ a1Pa3_M4;
+        for (unsigned char i = 0; i < 4; i++, pData += 4) {
+            unsigned char a0 = pData[0], a1 = pData[1], a2 = pData[2], a3 = pData[3];
+            pData[0] = GfMultBy0E(a0) ^ GfMultBy0B(a1) ^ GfMultBy0D(a2) ^ GfMultBy09(a3);
+            pData[1] = GfMultBy09(a0) ^ GfMultBy0E(a1) ^ GfMultBy0B(a2) ^ GfMultBy0D(a3);
+            pData[2] = GfMultBy0D(a0) ^ GfMultBy09(a1) ^ GfMultBy0E(a2) ^ GfMultBy0B(a3);
+            pData[3] = GfMultBy0B(a0) ^ GfMultBy0D(a1) ^ GfMultBy09(a2) ^ GfMultBy0E(a3);
         }
+    } else {
 
-        memcpy(pData, result, 4);
+        for (unsigned char i = 0; i < 4; i++, pData += 4) {
+            unsigned char temp = pData[0] ^ pData[1] ^ pData[2] ^ pData[3];
+            unsigned char result[4];
+            result[0] = temp ^ pData[0] ^ GfMultBy02((unsigned char)(pData[0] ^ pData[1]));
+            result[1] = temp ^ pData[1] ^ GfMultBy02((unsigned char)(pData[1] ^ pData[2]));
+            result[2] = temp ^ pData[2] ^ GfMultBy02((unsigned char)(pData[2] ^ pData[3]));
+            result[3] = temp ^ pData[3] ^ GfMultBy02((unsigned char)(pData[3] ^ pData[0]));
+            memcpy(pData, result, 4);
+        }
     }
 }
 
@@ -245,7 +273,6 @@ unsigned int aes_128_decrypt::AESDelPKCS7Padding(unsigned char *pData, unsigned 
 *****************************************************************************/
 void aes_128_decrypt::AESInit(AESInfo_t *aesInfoP)
 {
-
     unsigned char i;
     unsigned char *pExpandKey;//扩展密钥
     unsigned char Rcon[4] = {0x01, 0x00, 0x00, 0x00};
@@ -309,7 +336,7 @@ unsigned int aes_128_decrypt::AESEncrypt(AESInfo_t *aesInfoP, const unsigned cha
     }
 
     //必须是16的整倍数，不够的填充，pkcs7算法是缺n补n个n，比如13字节数据缺了3个，后面就补3个3;如果刚好是16的倍数，就填充16个16
-    dataLen = AESAddPKCS7Padding(pCipherText, dataLen);//注意如果是使用NOpadding方式，则此句注释掉即可，同时解密函数对应的AESDelPKCS7Padding()函数也需一同注释掉。
+    dataLen = AESAddPKCS7Padding(pCipherText, dataLen);
 
     pIV = aesInfoP->pIV;
     for (i = dataLen / (4 * Nb); i > 0 ; i--, pCipherText += 4 * Nb) {
@@ -357,8 +384,7 @@ unsigned int aes_128_decrypt::AESDecrypt(AESInfo_t *aesInfoP, unsigned char *pPl
     }
 
     //因为数据需要16字节对齐，可能有填充数据，需要去除后面的填充数据
-    return AESDelPKCS7Padding(pPlainTextBack, dataLen);//注意如果是使用NOpadding方式，则此句注释掉直接return datalen即可，同时加密函数对应的AESAddPKCS7Padding()函数也需一同注释掉。
-
+    return AESDelPKCS7Padding(pPlainTextBack, dataLen);
 }
 
 bool aes_128_decrypt::isprint(char c)
@@ -410,22 +436,26 @@ void aes_128_decrypt::my_aes_init(void)
   AESInit(&aesInfo);
 }
 
-//加密
-void aes_128_decrypt::my_aes_encrypt(unsigned char* sou_data, unsigned char* enc_data,unsigned char len)
+unsigned int aes_128_decrypt::my_aes_encrypt(unsigned char* sou_data, unsigned char* enc_data, unsigned int len)
 {
-    unsigned char  enc_len;             //加密后的密文长度
+    unsigned int enc_len;
     enc_len = AESEncrypt(&aesInfo, sou_data, enc_data, len);
-    PrintData("encryptMsg", enc_data, enc_len);
+    //PrintData("encryptMsg", enc_data, enc_len);
+    return enc_len;
 }
 
-//解密
-void aes_128_decrypt::my_aes_decrypt(unsigned char* enc_data, unsigned char* dec_data, unsigned char len)
+unsigned int aes_128_decrypt::my_aes_decrypt(unsigned char* enc_data, unsigned char* dec_data, unsigned int len)
 {
-    unsigned char  dec_len;                //解密后的明文长度
+    unsigned int dec_len;
     dec_len = AESDecrypt(&aesInfo, dec_data, enc_data, len);
-    PrintData("decryptMsg", dec_data, dec_len);
+    //PrintData("decryptMsg", dec_data, dec_len);
+    return dec_len;
 }
 
+void aes_128_decrypt::getKey(unsigned char *pKey)
+{
+  memcpy(pKey, aes_key, sizeof(aes_key));
+}
 
 //测试例1
 void aes_128_decrypt::my_aes_test(void)
